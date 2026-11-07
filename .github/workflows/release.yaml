@@ -3,7 +3,14 @@ on:
   release:
     types: [published]
 jobs:
+  lint:
+    uses: ./.github/workflows/lint.yaml
+  test:
+    needs: lint
+    uses: ./.github/workflows/test.yaml
   release_zip_file:
+    # Only attach the zip HACS installs from when the released code passes the checks
+    needs: [lint, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
