@@ -28,4 +28,5 @@ jobs:
           set -o pipefail
           uv run --with homeassistant==2026.8.1 --with mypy mypy | tee mypy.txt
       - if: always()
-        run: echo "mypy: $(tail -n 1 mypy.txt)" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "mypy: $(tail -n 1 mypy.txt)" >> "$GITHUB_STEP_SUMMARY"
