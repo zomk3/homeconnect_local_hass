@@ -15,3 +15,17 @@ jobs:
           - run: uv run ruff format --diff tests/
           - run: uv run ruff check custom_components/
           - run: uv run ruff check tests/
+  typecheck:
+    # Informational until the existing type errors are fixed; does not block merges or releases
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          enable-cache: true
+      - run: |
+          set -o pipefail
+          uv run --with homeassistant==2026.8.1 --with mypy mypy | tee mypy.txt
+      - if: always()
+        run: echo "mypy: $(tail -n 1 mypy.txt)" >> "$GITHUB_STEP_SUMMARY"
