@@ -2,13 +2,16 @@
 
 The **Home Connect Local** allows users to integrate their home appliances supporting the  [Home Connect](https://www.home-connect.com/global) standard for Bosch and Siemens using direct communication over the local network.
 
+> [!NOTE]
+> This is a fork of [chris-mc1/homeconnect_local_hass](https://github.com/chris-mc1/homeconnect_local_hass) with additional washer entities and fixes, published as beta releases. For general documentation and support, see the original project.
+
 ## Install the Integration
 
-1. Go to the HACS -> Custom Repositories and add this repository as a Custom Repository [See HACS Documentation for help](https://hacs.xyz/docs/faq/custom_repositories/)
+1. Go to the HACS -> Custom Repositories and add `https://github.com/zomk3/homeconnect_local_hass` as a Custom Repository of type "Integration" [See HACS Documentation for help](https://hacs.xyz/docs/faq/custom_repositories/). To get the beta releases, enable "Show beta versions" for the repository in HACS.
 
 2. Click the button bellow and click 'Download' to install the Integration:
 
-    [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?repository=homeconnect_local_hass&owner=chris-mc1)
+    [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?repository=homeconnect_local_hass&owner=zomk3)
 
 3. Restart Home Assistant.
 
