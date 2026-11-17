@@ -84,10 +84,6 @@ class HCEventSensor(HCEntity, SensorEntity):
                     return value
         return self.entity_description.options[-1]
 
-    @property
-    def available(self) -> bool:
-        return self._runtime_data.appliance.session.connected
-
 
 class HCActiveProgram(HCSensor):
     """Active Program Sensor Entity."""

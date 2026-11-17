@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import time
 from typing import TYPE_CHECKING
 
 from homeassistant.const import CONF_DEVICE_ID, CONF_HOST
+from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.exceptions import ConfigEntryError
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeconnect_websocket import (
     AllreadyConnectedError,
@@ -18,7 +20,13 @@ from homeconnect_websocket import (
     HomeAppliance,
 )
 
-from .const import CONF_AES_IV, CONF_PSK, MAX_RECONECT_TIME
+from .const import (
+    CONF_AES_IV,
+    CONF_PSK,
+    INITIAL_CONNECT_DELAY,
+    MAX_CONNECT_DELAY,
+    MAX_RECONECT_TIME,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -34,8 +42,7 @@ class HomeConnectCoordinator(DataUpdateCoordinator):
     config_entry: HCConfigEntry
     appliance: HomeAppliance
     _connecting: bool = True
-    _reconnecting: bool = False
-    connected: bool = False
+    _reconnect_grace_cancel: CALLBACK_TYPE | None = None
 
     def __init__(
         self, hass: HomeAssistant, config_entry: HCConfigEntry, description: DeviceDescription
@@ -59,13 +66,23 @@ class HomeConnectCoordinator(DataUpdateCoordinator):
             iv64=config_entry.data.get(CONF_AES_IV, None),
             connection_callback=self._connection_state_callback,
         )
-        self.disconnect_time = time.time()
         if not self.appliance.info:
             msg = "Appliance has no device info"
             raise ConfigEntryError(msg)
 
+    @property
+    def connected(self) -> bool:
+        """
+        Return if the Appliance is considered connected.
+
+        The Session state is the source of truth. While the Session is reconnecting,
+        the Appliance stays connected for up to MAX_RECONECT_TIME to hide short dropouts.
+        """
+        return self.appliance.session.connected or self._reconnect_grace_cancel is not None
+
     async def close(self) -> None:
         self._connecting = False
+        self._end_reconnect_grace()
         await self.appliance.close()
 
     async def _async_setup(self) -> None:
@@ -75,54 +92,63 @@ class HomeConnectCoordinator(DataUpdateCoordinator):
 
     async def _connect(self) -> None:
         self.logger.debug("Connecting to %s", self.appliance.info.get("vib"))
+        host = self.config_entry.data[CONF_HOST]
         first_failure = True
+        backoff = INITIAL_CONNECT_DELAY
         while self._connecting:
             try:
                 await self.appliance.connect()
                 if self.appliance.session.connected:
-                    self.connected = True  # FIX
-                    self.async_set_updated_data(None)  # FIX
+                    if not first_failure:
+                        self.logger.info("Connected to %s", host)
+                    # The library reports CONNECTED to the connection callback only after
+                    # the initial value fetch, notify listeners as soon as the Session is up
+                    self.async_set_updated_data(None)
                     return
-            except (ConnectionFailedError, HCHandshakeError):
+            except (ConnectionFailedError, HCHandshakeError, TimeoutError):
                 await self.appliance.close()
-                msg = f"Can't connect to {self.config_entry.data[CONF_HOST]}, retrying"
                 if first_failure:
-                    self.logger.error(msg)  # noqa: TRY400
-                    first_failure = False  # first_failure_fix
+                    self.logger.error("Can't connect to %s, retrying", host)  # noqa: TRY400
+                    first_failure = False
                 else:
-                    self.logger.debug(msg)
+                    self.logger.debug("Can't connect to %s, retrying", host)
             except AllreadyConnectedError:
                 await self.appliance.close()
-                msg = f"Allready connected to {self.config_entry.data[CONF_HOST]}"
-                self.logger.error(msg)  # noqa: TRY400
+                self.logger.error("Allready connected to %s", host)  # noqa: TRY400
                 return
             except Exception:
                 await self.appliance.close()
-                msg = f"Can't connect to {self.config_entry.data[CONF_HOST]}"
-                self.logger.exception(msg)
+                self.logger.exception("Can't connect to %s, retrying", host)
+                first_failure = False
+
+            # Wait before retrying, an unreachable appliance often fails immediately
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, MAX_CONNECT_DELAY)
 
     async def _async_update_data(self) -> None:
         return None
 
     async def _connection_state_callback(self, event: ConnectionState) -> None:
         if event == ConnectionState.RECONNECTING:
-            if not self._reconnecting:
-                self._reconnecting = True
-                reconnect_timeout = int(self.hass.loop.time()) + MAX_RECONECT_TIME
-                self.hass.loop.call_at(reconnect_timeout, self._connection_reconnect_callback)
-
+            if self._reconnect_grace_cancel is None:
+                self._reconnect_grace_cancel = async_call_later(
+                    self.hass, MAX_RECONECT_TIME, self._reconnect_grace_expired
+                )
         elif event == ConnectionState.CONNECTED:
-            self.connected = True
-            if self._reconnecting:
+            if self._reconnect_grace_cancel is not None:
                 self.logger.debug("Reconnected to %s", self.appliance.info.get("vib"))
-                self._reconnecting = False
-
-        elif event == ConnectionState.CLOSED:
-            self.connected = False
+            self._end_reconnect_grace()
+        elif event in (ConnectionState.CLOSED, ConnectionState.ABNORMAL_CLOSURE):
+            self._end_reconnect_grace()
 
         self.async_set_updated_data(None)
 
-    def _connection_reconnect_callback(self) -> None:
-        if not self.appliance.session.connected:
-            self.connected = False
-            self.async_set_updated_data(None)
+    def _end_reconnect_grace(self) -> None:
+        if self._reconnect_grace_cancel is not None:
+            self._reconnect_grace_cancel()
+            self._reconnect_grace_cancel = None
+
+    @callback
+    def _reconnect_grace_expired(self, _: object) -> None:
+        self._reconnect_grace_cancel = None
+        self.async_set_updated_data(None)

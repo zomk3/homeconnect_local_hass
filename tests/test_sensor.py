@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import Mock
 
+import pytest
+from custom_components.homeconnect_ws.entity_descriptions.descriptions_definitions import (
+    HCSensorEntityDescription,
+)
+from custom_components.homeconnect_ws.sensor import HCEventSensor
 from homeassistant.components.sensor import ATTR_OPTIONS
 from homeassistant.const import ATTR_FRIENDLY_NAME
 
@@ -145,3 +151,31 @@ async def test_update_active_program(
 
     state = hass.states.get(entity_id)
     assert state.state == "Named Favorite"
+
+
+@pytest.mark.parametrize(
+    ("last_update_success", "coordinator_connected", "available"),
+    [
+        (True, True, True),
+        (True, False, False),
+        (False, True, False),
+    ],
+)
+def test_event_sensor_availability(
+    *,
+    last_update_success: bool,
+    coordinator_connected: bool,
+    available: bool,
+) -> None:
+    """Test Event Sensor follows the shared Entity availability."""
+    appliance = Mock(entities={"Test.Event": Mock(spec=[])}, info={"deviceID": "device"})
+    runtime_data = Mock(appliance=appliance, device_info={})
+    runtime_data.coordinator.connected = coordinator_connected
+    runtime_data.coordinator.last_update_success = last_update_success
+    sensor = HCEventSensor(
+        HCSensorEntityDescription(
+            key="sensor_event", entities=["Test.Event"], options=["present", "off"]
+        ),
+        runtime_data,
+    )
+    assert bool(sensor.available) is available
