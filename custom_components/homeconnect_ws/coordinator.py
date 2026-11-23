@@ -42,6 +42,7 @@ class HomeConnectCoordinator(DataUpdateCoordinator):
     config_entry: HCConfigEntry
     appliance: HomeAppliance
     _connecting: bool = True
+    _reconnecting: bool = False
     _reconnect_grace_cancel: CALLBACK_TYPE | None = None
 
     def __init__(
@@ -130,15 +131,22 @@ class HomeConnectCoordinator(DataUpdateCoordinator):
 
     async def _connection_state_callback(self, event: ConnectionState) -> None:
         if event == ConnectionState.RECONNECTING:
-            if self._reconnect_grace_cancel is None:
+            # Reported again after each failed attempt, only a new connection loss
+            # starts the grace time
+            if not self._reconnecting:
+                self._reconnecting = True
                 self._reconnect_grace_cancel = async_call_later(
                     self.hass, MAX_RECONECT_TIME, self._reconnect_grace_expired
                 )
         elif event == ConnectionState.CONNECTED:
-            if self._reconnect_grace_cancel is not None:
-                self.logger.debug("Reconnected to %s", self.appliance.info.get("vib"))
-            self._end_reconnect_grace()
+            # Reported after the initial value fetch, the Session may be lost again by then
+            if self.appliance.session.connected:
+                if self._reconnecting:
+                    self.logger.debug("Reconnected to %s", self.appliance.info.get("vib"))
+                self._reconnecting = False
+                self._end_reconnect_grace()
         elif event in (ConnectionState.CLOSED, ConnectionState.ABNORMAL_CLOSURE):
+            self._reconnecting = False
             self._end_reconnect_grace()
 
         self.async_set_updated_data(None)

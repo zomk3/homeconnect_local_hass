@@ -139,6 +139,76 @@ async def test_connection_state(
     await hass.async_block_till_done()
 
 
+@pytest.mark.parametrize(("config_entry"), CONFIG_ENTRIES[:1])
+async def test_reconnect_grace_not_restarted(
+    config_entry: MockConfigEntry,
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test failed reconnect attempts don't start a new grace time."""
+    appliance = MockAppliance(DEVICE_DESCRIPTION, "host", "mock_app", "mock_app_id", "PSK_KEY")
+    appliance.session.connected = True
+    monkeypatch.setattr(homeconnect_ws.coordinator, "HomeAppliance", Mock(return_value=appliance))
+    monkeypatch.setattr(homeconnect_ws, "load_description", Mock(return_value=DEVICE_DESCRIPTION))
+
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    coordinator = config_entry.runtime_data.coordinator
+
+    appliance.session.connected = False
+    await coordinator._connection_state_callback(ConnectionState.RECONNECTING)
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=MAX_RECONECT_TIME + 1))
+    await hass.async_block_till_done()
+    assert coordinator.connected is False
+
+    # Reconnect attempt failed in the handshake, the library reports RECONNECTING again
+    await coordinator._connection_state_callback(ConnectionState.HANDSHAKE)
+    await coordinator._connection_state_callback(ConnectionState.RECONNECTING)
+    assert coordinator.connected is False
+
+    # A new connection loss after a successful reconnect gets a new grace time
+    appliance.session.connected = True
+    await coordinator._connection_state_callback(ConnectionState.CONNECTED)
+    appliance.session.connected = False
+    await coordinator._connection_state_callback(ConnectionState.RECONNECTING)
+    assert coordinator.connected is True
+
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+
+@pytest.mark.parametrize(("config_entry"), CONFIG_ENTRIES[:1])
+async def test_late_connected_event(
+    config_entry: MockConfigEntry,
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test a CONNECTED event arriving after the connection was lost is ignored."""
+    appliance = MockAppliance(DEVICE_DESCRIPTION, "host", "mock_app", "mock_app_id", "PSK_KEY")
+    appliance.session.connected = True
+    monkeypatch.setattr(homeconnect_ws.coordinator, "HomeAppliance", Mock(return_value=appliance))
+    monkeypatch.setattr(homeconnect_ws, "load_description", Mock(return_value=DEVICE_DESCRIPTION))
+
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    coordinator = config_entry.runtime_data.coordinator
+
+    # The library delivers CONNECTED after the value fetch, the Session may be lost by then
+    appliance.session.connected = False
+    await coordinator._connection_state_callback(ConnectionState.RECONNECTING)
+    await coordinator._connection_state_callback(ConnectionState.CONNECTED)
+    assert coordinator.connected is True
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=MAX_RECONECT_TIME + 1))
+    await hass.async_block_till_done()
+    assert coordinator.connected is False
+
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+
 @pytest.mark.parametrize(("config_entry"), CONFIG_ENTRIES)
 async def test_remove_entry(
     config_entry: MockConfigEntry,
